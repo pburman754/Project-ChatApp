@@ -1,0 +1,233 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat with <%= conversation.participants.join(' & ') %></title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <div class="container">
+            <a class="navbar-brand" href="/chats">
+                <i class="fas fa-arrow-left me-2"></i> Back to Conversations
+            </a>
+            <div class="d-flex">
+                <a href="/logout" class="btn btn-outline-light">
+                    <i class="fas fa-sign-out-alt"></i> Logout
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="main-content">
+        <div class="container chat-container">
+        <%- include('partials/flash') %>
+        <div class="chat-header mb-4">
+            <h2><i class="fas fa-comments"></i> Chat with <%= conversation.participants.join(' & ') %></h2>
+            <p>Real-time conversation</p>
+        </div>
+
+        <div class="chat-messages" id="chatMessages">
+            <% conversation.messages.forEach(chat => { %>
+                <div class="chat-message <%= chat.from === currentUser.username ? 'sent' : 'received' %> mb-3">
+                        <% if (chat.from !== currentUser.username) { %>
+                            <div class="avatar" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                                <%= chat.from.charAt(0).toUpperCase() %>
+                            </div>
+                        <% } %>
+                        <div class="chat-bubble">
+                            <div class="message-content">
+                                <%= chat.msg %>
+                            </div>
+                            <div class="message-meta">
+                                <span class="text-muted small"><%= new Date(chat.created_at).toLocaleTimeString() %></span>
+                                <% if (chat.status === 'sent') { %>
+                                    <i class="fas fa-check text-muted ms-1"></i>
+                                <% } else if (chat.status === 'delivered') { %>
+                                    <i class="fas fa-check-double text-muted ms-1"></i>
+                                <% } else if (chat.status === 'read') { %>
+                                    <i class="fas fa-check-double text-primary ms-1"></i>
+                                <% } %>
+                            </div>
+                        </div>
+                </div>
+            <% }); %>
+        </div>
+
+        <div class="chat-input mt-4">
+            <form id="messageForm">
+                <div class="input-group">
+                    <input type="hidden" id="from" value="<%= currentUser.username %>">
+                    <input type="hidden" id="to" value="<%= conversation.participants.find(p => p !== currentUser.username) %>">
+                    <input type="text" class="form-control" id="msg" placeholder="Type a message..." required>
+                    <button class="btn btn-primary" type="submit">
+                        <i class="fas fa-paper-plane"></i> Send
+                    </button>
+                </div>
+            </form>
+            <div id="typingIndicator" class="text-muted small mt-2" style="display: none;"></div>
+        </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/js/all.min.js"></script>
+    <script>
+        const socket = io();
+        const currentUserId = '<%= currentUser._id %>';
+        const currentUsername = '<%= currentUser.username %>';
+        const conversationId = '<%= conversation.participants.sort().join("-") %>';
+        const messageInput = document.getElementById('msg');
+        const typingIndicator = document.getElementById('typingIndicator');
+        let typingTimeout;
+
+        socket.emit('join', currentUserId);
+        socket.emit('joinUsername', currentUsername);
+
+        document.getElementById('messageForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const from = document.getElementById('from').value;
+            const to = document.getElementById('to').value;
+            const msg = document.getElementById('msg').value;
+
+            if (from === to) {
+                alert('You cannot send a message to yourself.');
+                return;
+            }
+
+            if (from && to && msg) {
+                socket.emit('newMessage', {
+                    from: from,
+                    to: to,
+                    msg: msg,
+                    owner: currentUserId
+                });
+                document.getElementById('msg').value = '';
+                socket.emit('stop typing', { to: to }); // Stop typing after sending message
+            }
+        });
+
+        // Typing indicator logic
+        messageInput.addEventListener('input', () => {
+            const toUser = document.getElementById('to').value;
+            socket.emit('typing', { to: toUser, from: currentUsername });
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                socket.emit('stop typing', { to: toUser, from: currentUsername });
+            }, 1000); // Emit stop typing after 1 second of inactivity
+        });
+
+        socket.on('typing', (data) => {
+            const otherUser = '<%= conversation.participants.find(p => p !== currentUser.username) %>';
+            if (data.from === otherUser) {
+                typingIndicator.textContent = `${data.from} is typing...`;
+                typingIndicator.style.display = 'block';
+            }
+        });
+
+        socket.on('stop typing', (data) => {
+            const otherUser = '<%= conversation.participants.find(p => p !== currentUser.username) %>';
+            if (data.from === otherUser) {
+                typingIndicator.textContent = '';
+                typingIndicator.style.display = 'none';
+            }
+        });
+
+        // Auto-scroll to the bottom on initial load so the latest messages are visible
+        (function scrollToBottomOnLoad() {
+            const chatMessages = document.getElementById('chatMessages');
+            if (chatMessages) {
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+        })();
+
+        socket.on('messageReceived', (chat) => {
+            // Only append messages that belong to this conversation
+            const convKeyIncoming = [chat.from, chat.to].sort().join('-');
+            if (convKeyIncoming !== conversationId) return;
+            const chatMessages = document.getElementById('chatMessages');
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('chat-message', chat.from === currentUsername ? 'sent' : 'received');
+            messageElement.setAttribute('data-message-id', chat._id);
+            messageElement.innerHTML = `
+                    ${chat.from !== currentUsername ? `<div class="avatar" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">${chat.from.charAt(0).toUpperCase()}</div>` : ''}
+                    <div class="chat-bubble">
+                        <div class="message-content">
+                            ${chat.msg}
+                        </div>
+                        <div class="message-meta">
+                            <span class="text-muted small">${new Date(chat.created_at).toLocaleTimeString()}</span>
+                            ${chat.status === 'sent' ? '<i class="fas fa-check text-muted ms-1"></i>' : ''}
+                        </div>
+                    </div>
+            `;
+            chatMessages.appendChild(messageElement);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            // Emit messageDelivered if the message is not from the current user
+            if (chat.from !== currentUsername) {
+                socket.emit('messageDelivered', { messageId: chat._id, recipientId: currentUserId });
+            }
+        });
+
+        socket.on('messageStatusUpdate', (updatedChat) => {
+            const messageElement = document.querySelector(`[data-message-id="${updatedChat._id}"]`);
+            if (messageElement) {
+                const statusIcon = messageElement.querySelector('.message-meta i');
+                if (statusIcon) {
+                    if (updatedChat.status === 'delivered') {
+                        statusIcon.classList.remove('fa-check');
+                        statusIcon.classList.add('fa-check-double');
+                    } else if (updatedChat.status === 'read') {
+                        statusIcon.classList.remove('fa-check', 'fa-check-double');
+                        statusIcon.classList.add('fa-check-double', 'text-primary');
+                    }
+                }
+            }
+        });
+
+        // Intersection Observer for message read status
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const messageElement = entry.target;
+                    const messageId = messageElement.dataset.messageId;
+                    const messageFrom = messageElement.querySelector('.sender-name').textContent;
+                    const messageStatusIcon = messageElement.querySelector('.message-meta i');
+
+                    // Only mark as read if it's not from the current user and not already read
+                    if (messageFrom !== currentUsername && messageStatusIcon && !messageStatusIcon.classList.contains('text-primary')) {
+                        socket.emit('messageRead', { messageId: messageId, readerId: currentUserId });
+                    }
+                    observer.unobserve(messageElement);
+                }
+            });
+        }, { threshold: 0.8 }); // Trigger when 80% of the message is visible
+
+        // Observe existing messages
+        document.querySelectorAll('.chat-message').forEach(messageElement => {
+            observer.observe(messageElement);
+        });
+
+        // Observe new messages as they are added
+        const chatMessagesContainer = document.getElementById('chatMessages');
+        const chatMessagesObserver = new MutationObserver((mutationsList) => {
+            for (const mutation of mutationsList) {
+                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                    mutation.addedNodes.forEach(node => {
+                        if (node.classList && node.classList.contains('chat-message')) {
+                            observer.observe(node);
+                        }
+                    });
+                }
+            }
+        });
+        chatMessagesObserver.observe(chatMessagesContainer, { childList: true });
+
+    </script>
+</body>
+</html>
