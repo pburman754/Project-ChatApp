@@ -23,7 +23,6 @@ const sessionOptions = {
     resave: false,
     saveUninitialized: true,
     cookie: {
-        expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
         maxAge: 7 * 24 * 60 * 60 * 1000,
         httpOnly: true
     }
@@ -38,11 +37,6 @@ passport.use(new LocalStrategy(User.authenticate()));
 passport.serializeUser(User.serializeUser());
 passport.deserializeUser(User.deserializeUser());
 
-main()
-    .then(() => {
-        console.log("connection successfull");
-    })
-    .catch((err) => console.log(err));
 
 async function main() {
     await mongoose.connect(process.env.DB_URL || 'mongodb://127.0.0.1:27017/whatsapp', {
@@ -65,24 +59,47 @@ app.get("/", (req, res) => {
 });
 
 app.get("/chats", isLoggedIn, async (req, res) => {
-    let allChats = await Chat.find({
-        $or: [
-            { from: req.user.username },
-            { to: req.user.username }
-        ]
-    }).sort({ created_at: -1 });
+    try {
+        const chats = await Chat.aggregate([
+            // Match chats involving the current user
+            {
+                $match: {
+                    $or: [{ from: req.user.username }, { to: req.user.username }],
+                },
+            },
+            // Sort by creation time to get the latest message first
+            {
+                $sort: { created_at: -1 },
+            },
+            // Group by conversation participants to get one group per conversation
+            {
+                $group: {
+                    _id: {
+                        $cond: {
+                            if: { $gt: ['$from', '$to'] },
+                            then: { $concat: ['$from', '-', '$to'] },
+                            else: { $concat: ['$to', '-', '$from'] },
+                        },
+                    },
+                    latestMessage: { $first: '$$ROOT' },
+                },
+            },
+            // Replace the root with the latest message document
+            {
+                $replaceRoot: { newRoot: '$latestMessage' },
+            },
+            // Sort the conversations by the latest message time
+            {
+                $sort: { created_at: -1 },
+            },
+        ]);
 
-    const conversations = {};
-    allChats.forEach(chat => {
-        const otherUser = chat.from === req.user.username ? chat.to : chat.from;
-        if (!conversations[otherUser] || chat.created_at > conversations[otherUser].created_at) {
-            conversations[otherUser] = chat;
-        }
-    });
-
-    const chats = Object.values(conversations).sort((a, b) => b.created_at - a.created_at);
-
-    res.render("index.ejs", { chats, currentUser: req.user, success: req.flash('success'), error: req.flash('error') });
+        res.render("index.ejs", { chats, currentUser: req.user, success: req.flash('success'), error: req.flash('error') });
+    } catch (error) {
+        console.error('Error fetching chats:', error);
+        req.flash('error', 'Failed to load chats.');
+        res.redirect('/');
+    }
 });
 
 app.get("/chats/new", isLoggedIn, (req, res) => {
@@ -431,22 +448,36 @@ io.on('connection', (socket) => {
 
 const PREFERRED_PORT = Number(process.env.PORT) || 8080;
 
-function startServer(port) {
-    server.listen(port, () => {
-        const addressInfo = server.address();
+function startServer(port, callback) {
+    const serverInstance = server.listen(port, () => {
+        const addressInfo = serverInstance.address();
         const actualPort = typeof addressInfo === 'object' && addressInfo ? addressInfo.port : port;
         console.log(`server is running with Socket.IO on port ${actualPort}`);
+        if (callback) {
+            callback(serverInstance);
+        }
     });
+
+    serverInstance.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+            console.warn(`Port ${port} in use, retrying on a random available port...`);
+            // Retry on a random available port by passing 0
+            startServer(0, callback);
+        } else {
+            throw err;
+        }
+    });
+
+    return serverInstance;
 }
 
-server.on('error', (err) => {
-    if (err && err.code === 'EADDRINUSE') {
-        console.warn(`Port ${PREFERRED_PORT} in use, retrying on a random available port...`);
-        // Retry on a random available port
-        startServer(0);
-    } else {
-        throw err;
-    }
-});
+if (require.main === module) {
+    main()
+        .then(() => {
+            console.log("connection successfull");
+            startServer(PREFERRED_PORT);
+        })
+        .catch((err) => console.log(err));
+}
 
-startServer(PREFERRED_PORT);
+module.exports = { app, server, main, startServer };

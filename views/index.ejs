@@ -45,61 +45,32 @@
                     </a>
                 </div>
             <% } else { %>
-                <!-- Group chats by conversation -->
-                <% 
-                const conversations = {};
-                chats.forEach(chat => {
-                    const key = [chat.from, chat.to].sort().join('-');
-                    if (!conversations[key]) {
-                        conversations[key] = {
-                            participants: [chat.from, chat.to],
-                            messages: [],
-                            lastMessage: null,
-                            lastMessageTime: null
-                        };
-                    }
-                    conversations[key].messages.push(chat);
-                    
-                    // Find the latest message
-                    if (!conversations[key].lastMessageTime || new Date(chat.created_at) > new Date(conversations[key].lastMessageTime)) {
-                        conversations[key].lastMessage = chat.msg;
-                        conversations[key].lastMessageTime = chat.created_at;
-                    }
-                });
-                
-                // Sort conversations by last message time
-                const sortedConversations = Object.values(conversations).sort((a, b) => 
-                    new Date(b.lastMessageTime) - new Date(a.lastMessageTime)
-                );
-                %>
-                
                 <div class="conversations-list">
-                    <% sortedConversations.forEach(conv => { %>
+                    <% chats.forEach(chat => { %>
+                        <% const otherUser = chat.from === currentUser.username ? chat.to : chat.from; %>
+                        <% const participants = [chat.from, chat.to].sort().join('-'); %>
                         <div class="conversation-item">
-                            <a href="/chats/conversation/<%= conv.participants.sort().join('-') %>" class="conversation-link text-decoration-none">
+                            <a href="/chats/conversation/<%= participants %>" class="conversation-link text-decoration-none">
                                 <div class="conversation-avatar">
                                     <div class="avatar" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-                                        <%= (conv.participants.find(p => p !== currentUser.username) ? conv.participants.find(p => p !== currentUser.username).charAt(0).toUpperCase() : 'U') %>
+                                        <%= otherUser.charAt(0).toUpperCase() %>
                                     </div>
                                 </div>
                                 <div class="conversation-content">
                                     <div class="conversation-header d-flex justify-content-between">
                                         <h6 class="conversation-title">
-                                            To: <%= conv.participants.find(p => p !== currentUser.username) %>
+                                            Conversation with: <strong><%= otherUser %></strong>
                                         </h6>
-                                        <h6 class="conversation-title">
-                                            From: <%= currentUser.username %>
-                                        </h6>
-                                        <span class="conversation-time text-muted small" data-time="<%= conv.lastMessageTime.toISOString() %>">
-                                            <%= new Date(conv.lastMessageTime).toLocaleTimeString() %>
+                                        <span class="conversation-time text-muted small" data-time="<%= chat.created_at.toISOString() %>">
+                                            <%= new Date(chat.created_at).toLocaleTimeString() %>
                                         </span>
                                     </div>
                                     <div class="conversation-preview">
-                                        <p class="text-muted mb-0"><%= conv.lastMessage %></p>
+                                        <p class="text-muted mb-0"><%= chat.msg %></p>
                                     </div>
                                 </div>
                             </a>
-                            <form method="POST" action="/chats/conversation/<%= conv.participants.sort().join('-') %>?_method=DELETE" class="delete-form">
+                            <form method="POST" action="/chats/conversation/<%= participants %>?_method=DELETE" class="delete-form">
                                 <button type="submit" class="btn btn-danger btn-sm">
                                     <i class="fas fa-trash"></i>
                                 </button>
